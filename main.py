@@ -23,6 +23,7 @@ from copy import deepcopy as copy
 import time
 import wandb
 import argparse
+from tqdm import tqdm
 
 def dino_model():
     os.environ['TORCH_HOME'] = './'
@@ -157,13 +158,15 @@ def cleanup():
 def training_process(args):
 
     rank, world_size = int(os.environ['RANK']), int(os.environ['WORLD_SIZE'])
-
+    # getting the local index of the device for this process
     device = torch.device(rank % torch.cuda.device_count())
+    # many torch functionalities will require that the torch.cuda.current_device() is set.
     torch.cuda.set_device(device)
+    # if this is the master process then we will start logging to weights and biases
     if rank == 0:
        wandb.init(project='OUAI Demo',
                    entity='ai2es',
-                   name=f'Tuning DINOv2',
+                   name='Tuning DINOv2',
         )
        
     auto_wrap_policy = functools.partial(
@@ -171,20 +174,32 @@ def training_process(args):
 
     DINOv2 = dino_model()
 
+    # append a linear layer to the frozen backbone to utilize "transfer learning"
+    # the model must be sent .to(device) prior to wrapping
     model = LinearProbe(DINOv2).to(device)
+
+    # model wrapper argument for activation checkpointing which saves memory
+
+    auto_wrap_policy = functools.partial(
+        size_based_auto_wrap_policy, min_num_params=1_000_000)
+
+    # wrap the model with the Fully-Sharded Data Parallel wrapper which handles many things for us
 
     model = FSDP(model, 
                 auto_wrap_policy=auto_wrap_policy,
                 mixed_precision=MixedPrecision(param_dtype=torch.bfloat16, cast_forward_inputs=True)
             )
 
+    # define the optimizer, this must occur after wrapping
+
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
 
+    # instance preprocessing necessary for using the pre-trained backbone
     DINOv2_transform = dino_transforms()
-
+    # dataset objects for the CIFAR100 image classification task
     train_ds = torchvision.datasets.CIFAR100('./cifar100', train=True, transform=DINOv2_transform, download=True)
     val_ds = torchvision.datasets.CIFAR100('./cifar100', train=False, transform=DINOv2_transform, download=True)
-
+    # distributed sampler that makes sure each rank gets different instances from the dataset in each epoch
     sampler_train = DistributedSampler(train_ds, rank=rank, num_replicas=world_size, shuffle=True)
     sampler_val = DistributedSampler(val_ds, rank=rank, num_replicas=world_size, shuffle=False)
 
@@ -212,11 +227,11 @@ def training_process(args):
 
     val_loader = DataLoader(val_ds, **loader_kwargs)
 
-    s = 0
+
     print(os.environ['RANK'], 'linear probe')
-    for epoch in range(args.epochs):
-        print(os.environ['RANK'], epoch)
-        s += 1
+    for epoch in tqdm(range(args.epochs)):
+        # to update the randomness used for shuffling in the sampler
+        sampler_train.set_epoch(epoch)
         train(model, opt, train_loader)
         gc.collect()
         vacc = torch.tensor(test(model, val_loader, silent=True)).to(device)
@@ -233,7 +248,7 @@ def training_process(args):
     model = LinearProbe(DINOv2).to(device)
 
     model.load_state_dict(states)
-
+    # the Full Parameter Fine-Tuning Object.
     model = FPFT(model)
 
     model = FSDP(model, 
@@ -244,8 +259,8 @@ def training_process(args):
     opt = torch.optim.Adam(model.parameters(), lr=args.lr / 8.0)
 
     print(os.environ['RANK'], 'finetuning')
-    for epoch in range(args.epochs):
-        s += 1
+    for epoch in tqdm(range(args.epochs)):
+        sampler_train.set_epoch(epoch)
         train(model, opt, train_loader)
         gc.collect()
         vacc = torch.tensor(test(model, val_loader, silent=True)).to(device)
@@ -269,18 +284,22 @@ def create_parser():
 
 
 def main():
+    # parse command line arguments
     parser = create_parser()
     args = parser.parse_args()
+    # set up process group
     setup()
+    # do the experiment
     training_process(args)
+    # clean up process group
     cleanup()
 
 if __name__ == '__main__':
-    parser = create_parser()
-    args = parser.parse_args()
-    
+    # get the number of processes we will be using in parallel
+    # there will be one for each gpu we are using
     world_size = int(os.environ["WORLD_SIZE"])
+    # the 'rank' of the current process, a unique id for the current gpu
     rank = int(os.environ["RANK"])
     torch.multiprocessing.set_start_method('spawn')
-
+    # then we launch the main method
     main()
