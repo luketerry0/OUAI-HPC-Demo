@@ -5,7 +5,6 @@ This repository serves as an introduction to the OSCER system and a template for
 ## Table of Contents
 - [Installation](#installation)
 - [Execution Walkthrough](#execution-walkthrough)
-- [Roadmap](#roadmap)
 - [License](#license)
 
 ## Installation
