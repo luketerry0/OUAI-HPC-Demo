@@ -17,6 +17,17 @@ To install the package just clone this repository into your home directory.  You
 
 This project requires the use of a large number of packages, some of which are implemented in python, and others of which are compiled for this machine.  Some of those packages in turn rely on system modules that we are not permitted to install on an HPC system, but which must be installed by system administrators.  Luckily, this system has many users and the packages you want are already likely installed, but OSCER is a distributed system not all modules are installed on all machines within the system.  You can load the module you would like with the `module load <module name>` command.  This process is streamlined for python packages and you can use the conda or mamba modules to manage virtual environments that handle the CUDA and python modules you will need for deep learning.
 
+### Conda Environment
+
+The following SLURM script uses an environment located at `/home/jroth/.conda/envs/mct`. If this environment changes in the future, the script will not work out of the box. Because of that, this repo contains `env.yaml` and `requirments.txt`. In order to recreate the environment, you can use the following commands:
+
+```
+conda env create -f env.yaml
+pip install -r requirements.txt
+```
+
+After that, you will need to alter the SLURM script to point to the directory where your conda environment is (replacing `/home/jroth/.conda/envs/mct`)
+
 ### The SBatch Script
 
 The Simple Linux Utility for Resource Management (SLURM) is the resource manager for the OSCER system, and many other systems like it.  The resource manager manages a set of partitions (which are mathematically subsets) of the resources within the system.  Each partition is assigned nodes each of which has a name.  You can use the `sinfo` command to get a list of the nodes and their status.  There are many helpful resource which describe the different functionalities of slurm such as [this one](https://wiki.umiacs.umd.edu/umiacs/index.php/SLURM), so that discussion is better left to those resources.  I will just address one resource request below.
